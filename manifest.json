@@ -1,0 +1,49 @@
+{
+  "name": "Locoloader",
+  "description": "Add extra powers⚡ to Locoloader.com!",
+  "version": "1.6.7",
+  "manifest_version": 3,
+  "permissions": [
+    "tabs",
+    "downloads",
+    "declarativeNetRequest",
+    "storage",
+    "scripting",
+    "management"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "128": "icons/icon128.png"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.locoloader.com/*",
+        "https://www.locoloader.test/*"
+      ],
+      "js": ["extension.js"]
+    },
+    {
+      "matches": [
+        "https://www.locoloader.com/*",
+        "https://www.locoloader.test/*"
+      ],
+      "js": ["content.js"]
+    }
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://www.locoloader.com/*",
+      "https://www.locoloader.test/*"
+    ]
+  }
+}
