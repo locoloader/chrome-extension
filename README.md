@@ -2,7 +2,7 @@
 
 ### :hammer_and_wrench: Installation
 1. [Download the extension](https://github.com/locoloader/chrome-extension/archive/refs/heads/main.zip) and unzip it
-2. Visit [chrome://extensions](chrome://extensions/) and turn on "Developer mode"
+2. Visit <a href="chrome://extensions">chrome://extensions</a> and turn on "Developer mode"
 3. Drag and drop the extension folder anywhere onto the extensions page
 
 :bulb: If you don't want to install the extension from source, you can still use our [Firefox extension](https://addons.mozilla.org/en-US/firefox/addon/locoloader/).
