@@ -1,14 +1,24 @@
 # Locoloader Chrome Extension
 
 ### :hammer_and_wrench: Installation
-To install the extension, follow this 3-step guide: <a href="https://dev.to/ben/how-to-install-chrome-extensions-manually-from-github-1612" target="_blank">https://dev.to/ben/how-to-install-chrome-extensions-manually-from-github-1612</a>
+1. [Download the extension](https://github.com/locoloader/chrome-extension/archive/refs/heads/main.zip) and unzip it
+2. Visit [chrome://extensions](chrome://extensions) and turn on "Developer mode"
+3. Drag and drop the extension folder anywhere onto the extensions page
 
-If you don't want to install the extension from source, you can still use our [Firefox extension](https://addons.mozilla.org/en-US/firefox/addon/locoloader/).
+:bulb: If you don't want to install the extension from source, you can still use our [Firefox extension](https://addons.mozilla.org/en-US/firefox/addon/locoloader/).
+
+### :new: Update
+1. Visit [chrome://extensions](chrome://extensions)
+2. Remove the Locoloader extension
+3. Follow the [installation steps](#hammer_and_wrench-installation) 
 
 ### :thinking: Why not from the Chrome Web Store?
 This extension has been in the Chrome Web Store for almost 4 years and has been installed by more than 100k+ users. Unfortunately, it has been removed from the store due to its potential use with adult content.
 
-<img src="./img/chrome-web-store-removal-notification.png" style="width: 100%; max-width: 640px;"/>
+<p style="text-align: center;"><img src="./img/chrome-web-store-removal-notification.png" width="580" alt="Chrome Web Store Removal Notification"></p>
+
+### :thinking: Is it safe?
+We have open-sourced the Locoloader extension and anyone can take a look at the source code for full transparency. If you discover a security vulnerability, please send an e-mail to [info@locoloader.com](mailto:info@locoloader.com).  
 
 ### MIT License
 Copyright (c) 2024 Locoloader.com
