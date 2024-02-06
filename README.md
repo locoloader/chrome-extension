@@ -8,7 +8,7 @@
 
 :bulb: If you don't want to install the extension from source, you can still use our [Firefox extension](https://addons.mozilla.org/en-US/firefox/addon/locoloader/).
 
-### :new: Update
+### :hammer_and_wrench: Update
 1. Visit the URL `chrome://extensions`
 2. Remove the Locoloader extension
 3. Follow the [installation steps](#hammer_and_wrench-installation) 
