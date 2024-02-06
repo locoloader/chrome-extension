@@ -1,14 +1,15 @@
 # Locoloader Chrome Extension
 
 ### :hammer_and_wrench: Installation
-1. [Download the extension](https://github.com/locoloader/chrome-extension/archive/refs/heads/main.zip) and unzip it
-2. Visit <a href="chrome://extensions">chrome://extensions</a> and turn on "Developer mode"
-3. Drag and drop the extension folder anywhere onto the extensions page
+1. Download this extension as a [ZIP file from GitHub](https://github.com/locoloader/chrome-extension/archive/refs/heads/main.zip)
+2. Unzip the file and you should have a folder named `chrome-extension-main`
+3. Visit the URL `chrome://extensions` and enable `Developer mode`
+4. Drag and drop the `chrome-extension-main` folder anywhere onto the extensions page to install it (do not delete the folder afterwards)
 
 :bulb: If you don't want to install the extension from source, you can still use our [Firefox extension](https://addons.mozilla.org/en-US/firefox/addon/locoloader/).
 
 ### :new: Update
-1. Visit [chrome://extensions](chrome://extensions)
+1. Visit the URL `chrome://extensions`
 2. Remove the Locoloader extension
 3. Follow the [installation steps](#hammer_and_wrench-installation) 
 
