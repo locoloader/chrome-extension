@@ -6,6 +6,8 @@
 3. Visit the URL `chrome://extensions` and enable `Developer mode`
 4. Drag and drop the `chrome-extension-main` folder anywhere onto the extensions page to install it (do not delete the folder afterwards)
 
+<p><img src="./img/how-to-install-chrome-extension-locally.gif" width="580" alt="How to Install the Chrome Extension Locally"></p>
+
 :bulb: If you don't want to install the extension from source, you can still use our [Firefox extension](https://addons.mozilla.org/en-US/firefox/addon/locoloader/).
 
 ### :hammer_and_wrench: Update
@@ -16,7 +18,7 @@
 ### :thinking: Why not from the Chrome Web Store?
 This extension has been in the Chrome Web Store for almost 4 years and has been installed by more than 100k+ users. Unfortunately, it has been removed from the store due to its potential use with adult content.
 
-<p style="text-align: center;"><img src="./img/chrome-web-store-removal-notification.png" width="580" alt="Chrome Web Store Removal Notification"></p>
+<p><img src="./img/chrome-web-store-removal-notification.png" width="580" alt="Chrome Web Store Removal Notification"></p>
 
 ### :thinking: Is it safe?
 We have open-sourced the Locoloader extension and anyone can take a look at the source code for full transparency. If you discover a security vulnerability, please send an e-mail to [info@locoloader.com](mailto:info@locoloader.com).  
