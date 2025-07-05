@@ -171,7 +171,7 @@ function openTab(page) {
             // Monkeypatch MAIN JS code
             chrome.scripting.executeScript({
                 world: 'MAIN',
-                target: {tabId: tab.id},
+                target: { tabId: tab.id },
                 func: () => {
                     // Console clear monkeypatch
                     console.clear = () => {
@@ -182,7 +182,7 @@ function openTab(page) {
                 // Add configuration for fetcher.js
                 chrome.scripting.executeScript({
                     world: 'MAIN',
-                    target: {tabId: tab.id},
+                    target: { tabId: tab.id },
                     func: (page) => {
                         document.LLPage = page
                     },
@@ -192,7 +192,7 @@ function openTab(page) {
                     // Run and resolve fetcher.js
                     chrome.scripting.executeScript({
                         world: 'MAIN',
-                        target: {tabId: tab.id},
+                        target: { tabId: tab.id },
                         files: ['fetcher.js'],
                     }, (result) => {
                         // console.log('Tab in background.js received result from fetcher.js: ', result)
@@ -250,9 +250,16 @@ chrome.runtime.onMessage.addListener(async (message) => {
             }
         }
 
+        let tabUrl = message.previewURL
+
+        // Preview URLs inside native HTML player
+        if (extActions && extActions.playerPreview) {
+            tabUrl = chrome.runtime.getURL(`player.html?src=${encodeURIComponent(message.previewURL)}`)
+        }
+
         setTimeout(() => {
             chrome.tabs.create({
-                url: message.previewURL,
+                url: tabUrl,
                 active: true,
             }, (res) => {
                 // Remove declarativeNetRequest session rules (remove preview link headers)
@@ -314,9 +321,9 @@ chrome.runtime.onMessageExternal.addListener(async (message, sender, sendRespons
 
         // Set HTTP headers
         if (message.setHeaders.length > 0) {
-            console.log('Received headers:', message.setHeaders)
+            // console.log('Received headers:', message.setHeaders)
             for (let setHeaderObj of message.setHeaders) {
-                console.log('Header obj:', setHeaderObj)
+                // console.log('Header obj:', setHeaderObj)
                 setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
             }
         }
@@ -330,7 +337,7 @@ chrome.runtime.onMessageExternal.addListener(async (message, sender, sendRespons
         }
 
         // Response
-        sendResponse(pageObj ? pageObj[0].result : {html: ''})
+        sendResponse(pageObj ? pageObj[0].result : { html: '' })
     }
 
     // Fetch the specified URL inline
@@ -340,6 +347,17 @@ chrome.runtime.onMessageExternal.addListener(async (message, sender, sendRespons
             'url': message.url,
             'headers': {},
             'html': '',
+        }
+
+        // Set custom permanent HTTP headers
+        if (message.setHeaders && message.setHeaders.length > 0) {
+            // Debug logs, uncomment for testing
+            // console.log('Received headers:', message.setHeaders)
+            for (let setHeaderObj of message.setHeaders) {
+                // Debug logs, uncomment for testing
+                // console.log('Header obj:', setHeaderObj)
+                setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
+            }
         }
 
         // Set request headers...
@@ -437,7 +455,7 @@ function hash(string) {
 // Set declarativeNetRequest HTTP headers
 function setHeaders(action, condition, permanent = false) {
     // Generate header uid
-    const jsonString = JSON.stringify({'action': action, 'condition': condition})
+    const jsonString = JSON.stringify({ 'action': action, 'condition': condition })
     const headerUUID = hash(jsonString)
 
     // Do not set the same header multiple times
@@ -541,7 +559,7 @@ function injectContentScripts() {
         tabs.forEach((tab) => {
             chrome.scripting
                 .executeScript({
-                    target: {tabId: tab.id},
+                    target: { tabId: tab.id },
                     files: ['content.js']
                 }, (result) => {
                     // console.log('Injected content scripts when loading/reloading the extension to: ' + tab.id)
@@ -588,7 +606,7 @@ chrome.runtime.onInstalled.addListener(onInstalled)
 
 // Fired when user enables the extension
 function onEnabled(extension) {
-    if(extension.id === chrome.runtime.id) {
+    if (extension.id === chrome.runtime.id) {
         injectContentScripts()
     }
 }
