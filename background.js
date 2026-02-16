@@ -285,7 +285,7 @@ chrome.runtime.onMessage.addListener(async (message) => {
 
 // Listening to an external message
 // ---------------------------------------------
-chrome.runtime.onMessageExternal.addListener(async (message, sender, sendResponse) => {
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
     // console.log('Background.js received message from App.js:', message)
     // Allow only external messages from trusted origins
     if (sender.origin !== 'https://www.locoloader.com' && sender.origin !== 'https://www.locoloader.test') {
@@ -294,132 +294,146 @@ chrome.runtime.onMessageExternal.addListener(async (message, sender, sendRespons
 
     // Update HTTP headers
     if (message.type && message.type === 'ext-headers') {
-        if (message.setHeaders.length > 0) {
-            // Debug logs, uncomment for testing
-            // console.log('Received headers:', message.setHeaders)
-            for (let setHeaderObj of message.setHeaders) {
+        const job = async () => {
+            if (message.setHeaders.length > 0) {
                 // Debug logs, uncomment for testing
-                // console.log('Header obj:', setHeaderObj)
-                setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
+                // console.log('Received headers:', message.setHeaders)
+                for (let setHeaderObj of message.setHeaders) {
+                    // Debug logs, uncomment for testing
+                    // console.log('Header obj:', setHeaderObj)
+                    setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
+                }
             }
+
+            // Response
+            sendResponse({
+                'msg': 'headers set',
+            })
         }
 
-        // Response
-        sendResponse({
-            'msg': 'headers set',
-        })
+        job()
     }
 
     // Fetch the specified URL in a new tab
     if (message.type && message.type === 'ext-tab') {
-
-        // Set tab headers
-        if (message.headers.action && message.headers.condition) {
-            // console.log('Setting headers: ', message.headers)
-            const headerInfo = setHeaders(message.headers.action, message.headers.condition)
-        }
-
-        // Set HTTP headers
-        if (message.setHeaders.length > 0) {
-            // console.log('Received headers:', message.setHeaders)
-            for (let setHeaderObj of message.setHeaders) {
-                // console.log('Header obj:', setHeaderObj)
-                setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
+        const job = async () => {
+            // Set tab headers
+            if (message.headers.action && message.headers.condition) {
+                // console.log('Setting headers: ', message.headers)
+                const headerInfo = setHeaders(message.headers.action, message.headers.condition)
             }
+
+            // Set HTTP headers
+            if (message.setHeaders.length > 0) {
+                // console.log('Received headers:', message.setHeaders)
+                for (let setHeaderObj of message.setHeaders) {
+                    // console.log('Header obj:', setHeaderObj)
+                    setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
+                }
+            }
+
+            // Request
+            const pageObj = await openTab(message)
+
+            // Remove request headers
+            if (typeof headerInfo !== 'undefined' && message.headers.action && message.headers.condition) {
+                removeHeaders(headerInfo.UUID)
+            }
+
+            // Response
+            sendResponse(pageObj ? pageObj[0].result : { html: '' })
         }
 
-        // Request
-        const pageObj = await openTab(message)
-
-        // Remove request headers
-        if (typeof headerInfo !== 'undefined' && message.headers.action && message.headers.condition) {
-            removeHeaders(headerInfo.UUID)
-        }
-
-        // Response
-        sendResponse(pageObj ? pageObj[0].result : { html: '' })
+        job()
     }
 
     // Fetch the specified URL inline
     if (message.type && message.type === 'ext-fetch') {
-        // Default response
-        const pageObj = {
-            'url': message.url,
-            'headers': {},
-            'html': '',
-        }
-
-        // Set custom permanent HTTP headers
-        if (message.setHeaders && message.setHeaders.length > 0) {
-            // Debug logs, uncomment for testing
-            // console.log('Received headers:', message.setHeaders)
-            for (let setHeaderObj of message.setHeaders) {
-                // Debug logs, uncomment for testing
-                // console.log('Header obj:', setHeaderObj)
-                setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
+        const job = async () => {
+            // Default response
+            const pageObj = {
+                'url': message.url,
+                'headers': {},
+                'html': '',
             }
-        }
 
-        // Set request headers...
-        let requestHeaders = []
+            // Set custom permanent HTTP headers
+            if (message.setHeaders && message.setHeaders.length > 0) {
+                // Debug logs, uncomment for testing
+                // console.log('Received headers:', message.setHeaders)
+                for (let setHeaderObj of message.setHeaders) {
+                    // Debug logs, uncomment for testing
+                    // console.log('Header obj:', setHeaderObj)
+                    setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
+                }
+            }
 
-        // ...other HTTP headers
-        if (message.fetchOptions.headers && Object.keys(message.fetchOptions.headers)) {
-            for (const [key, val] in message.fetchOptions.headers) {
+            // Set request headers...
+            let requestHeaders = []
+
+            // ...other HTTP headers
+            if (message.fetchOptions.headers && Object.keys(message.fetchOptions.headers)) {
+                for (const [key, val] in message.fetchOptions.headers) {
+                    requestHeaders.push({
+                        'header': key,
+                        'operation': 'set',
+                        'value': val
+                    })
+                }
+            }
+
+            // ...referer
+            if (message.fetchOptions.referrer) {
                 requestHeaders.push({
-                    'header': key,
+                    'header': 'Referer',
                     'operation': 'set',
-                    'value': val
+                    'value': message.fetchOptions.referrer
                 })
             }
+
+            // ...referer policy
+            if (message.fetchOptions.referrerPolicy) {
+                requestHeaders.push({
+                    'header': 'Referrer-Policy',
+                    'operation': 'set',
+                    'value': message.fetchOptions.referrerPolicy
+                })
+            }
+
+            // ...set headers
+            if (requestHeaders.length) {
+                const headerInfo = setHeaders({
+                    'type': 'modifyHeaders',
+                    'requestHeaders': requestHeaders,
+                }, {
+                    'resourceTypes': ['xmlhttprequest']
+                })
+            }
+
+            // Request
+            const fetchResponse = await fetch(message.url, message.fetchOptions ? message.fetchOptions : {})
+
+            // Remove request headers
+            if (typeof headerInfo !== 'undefined') {
+                removeHeaders(headerInfo.UUID)
+            }
+
+            // ...get page HTML
+            pageObj.html = await fetchResponse.text()
+
+            // ...get page HTTP headers
+            pageObj.headers = Object.fromEntries(fetchResponse.headers.entries())
+
+            // Response...
+            // Send response back to Locoloader
+            sendResponse(pageObj)
         }
 
-        // ...referer
-        if (message.fetchOptions.referrer) {
-            requestHeaders.push({
-                'header': 'Referer',
-                'operation': 'set',
-                'value': message.fetchOptions.referrer
-            })
-        }
-
-        // ...referer policy
-        if (message.fetchOptions.referrerPolicy) {
-            requestHeaders.push({
-                'header': 'Referrer-Policy',
-                'operation': 'set',
-                'value': message.fetchOptions.referrerPolicy
-            })
-        }
-
-        // ...set headers
-        if (requestHeaders.length) {
-            const headerInfo = setHeaders({
-                'type': 'modifyHeaders',
-                'requestHeaders': requestHeaders,
-            }, {
-                'resourceTypes': ['xmlhttprequest']
-            })
-        }
-
-        // Request
-        const fetchResponse = await fetch(message.url, message.fetchOptions ? message.fetchOptions : {})
-
-        // Remove request headers
-        if (typeof headerInfo !== 'undefined') {
-            removeHeaders(headerInfo.UUID)
-        }
-
-        // ...get page HTML
-        pageObj.html = await fetchResponse.text()
-
-        // ...get page HTTP headers
-        pageObj.headers = Object.fromEntries(fetchResponse.headers.entries())
-
-        // Response...
-        // Send response back to Locoloader
-        sendResponse(pageObj)
+        job()
     }
+
+    // Mandatory: Keeps the message channel open for async response
+    return true
 })
 
 // HTTP request / response modifications
