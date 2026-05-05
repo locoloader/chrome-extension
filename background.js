@@ -252,9 +252,11 @@ chrome.runtime.onMessage.addListener(async (message) => {
 
         let tabUrl = message.previewURL
 
-        // Preview URLs inside native HTML player
-        if (extActions && extActions.playerPreview) {
-            tabUrl = chrome.runtime.getURL(`player.html?src=${encodeURIComponent(message.previewURL)}`)
+        // Preview URLs inside player.
+        if (message.player === 'true' || (extActions && extActions.playerPreview)) {
+            const sessionId = 'preview_' + crypto.randomUUID()
+            tabUrl = chrome.runtime.getURL(`player.html?data=${message.linkType}&sessionId=${sessionId}`)
+            chrome.storage.session.set({ [sessionId]: message.previewURL });
         }
 
         setTimeout(() => {

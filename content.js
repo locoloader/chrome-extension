@@ -196,12 +196,6 @@ if (typeof document.injected == 'undefined') {
             target = isItPreviewButton(e.target)
 
             if (target) {
-                // If preview button link is not preview-able, do not initiate the preview
-                const isPreviewable = target.getAttribute('data-is-previewable')
-                if (isPreviewable === 'false') {
-                    return
-                }
-
                 // If URL is empty or equals 'exceeded' do not initiate the preview
                 const url = target.getAttribute('href')
                 if (!url || url === 'exceeded') {
@@ -220,7 +214,9 @@ if (typeof document.injected == 'undefined') {
 
                 chrome.runtime.sendMessage({
                     previewURL: url,
+                    linkType: target.getAttribute('data-link-type'),
                     fileType: target.getAttribute('data-file-type'),
+                    player: target.getAttribute('data-player-ext'),
                     extActions: getExtensionActions()
                 })
             }
