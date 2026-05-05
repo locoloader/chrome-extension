@@ -202,6 +202,11 @@ if (typeof document.injected == 'undefined') {
                     return
                 }
 
+                // Don't use extension to handle preview button, when it's not required.
+                if (target.getAttribute('data-ext') !== 'true') {
+                    return
+                }
+
                 // If the version of this extension is lower than the required extension version do not initiate the preview
                 const minExtensionVersion = parseInt(target.getAttribute('data-ext-ver'))
                 const extVersion = parseInt(chrome.runtime.getManifest().version.replaceAll('.', ''))
