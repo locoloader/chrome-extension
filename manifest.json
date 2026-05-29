@@ -1,7 +1,7 @@
 {
   "name": "Locoloader",
   "description": "Add extra powers⚡ to Locoloader.com!",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "manifest_version": 3,
   "permissions": [
     "tabs",
@@ -32,13 +32,6 @@
         "https://www.locoloader.test/*"
       ],
       "js": ["extension.js"]
-    },
-    {
-      "matches": [
-        "https://www.locoloader.com/*",
-        "https://www.locoloader.test/*"
-      ],
-      "js": ["content.js"]
     }
   ],
   "externally_connectable": {

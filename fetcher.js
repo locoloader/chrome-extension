@@ -1,6 +1,6 @@
 // Obtain AsyncFunction
 // @link https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AsyncFunction
-const LLAsyncFunction = (async function () {}).constructor;
+const LLAsyncFunction = async function () {}.constructor;
 
 // Actions
 const LLActionsErrors = [];
@@ -143,7 +143,7 @@ const LLActions = {
             el.scrollIntoView({
                 block: 'center',
                 inline: 'center',
-            })
+            });
 
             resolve();
         });
@@ -183,7 +183,6 @@ const LLActions = {
 
                 maxTime = selector[1];
                 selector = selector[0];
-
             } else if (typeof selector !== 'string') {
                 LLActionsErrors.push('Type error: WaitFor selector must be a string.');
                 resolve();
@@ -205,7 +204,7 @@ const LLActions = {
 
             observer.observe(document, {
                 childList: true,
-                subtree: true
+                subtree: true,
             });
 
             // Don't wait more than 30s for an element, 30s is the API response limit
@@ -223,18 +222,19 @@ const LLActions = {
                 return;
             }
 
-            code = 'async function SB_go() {' + code + '} resolve(await SB_go());'
-            new LLAsyncFunction('resolve', code)(resolve)
-        })
+            code = code + ' resolve(await SB_go());';
+            new LLAsyncFunction('resolve', code)(resolve);
+        });
     },
 };
 
 // Data fetcher
-function fetcher(LLPage) {
+function fetcher(message) {
     return new Promise(async (resolve) => {
         // Default response
         let response = {
-            url: LLPage.url,
+            event: 'PRE_EXTRACTION',
+            url: message.url,
             headers: {},
             html: '',
             dom: '',
@@ -243,13 +243,13 @@ function fetcher(LLPage) {
                 result: [],
             },
             xhr: [],
-            windowURL: LLPage.windowURL,
-        }
+            windowURL: message.windowURL,
+        };
 
         // Prepare HTTP headers for fetch request
         let fetchOptions = {};
-        if (LLPage.headers && LLPage.headers.requestHeaders && LLPage.headers.requestHeaders.action) {
-            for (const header of LLPage.headers.action.requestHeaders) {
+        if (message.headers && message.headers.requestHeaders && message.headers.requestHeaders.action) {
+            for (const header of message.headers.action.requestHeaders) {
                 if (header.operation === 'set' || header.operation === 'append') {
                     fetchOptions['headers'][header.header] = header.value;
                 }
@@ -257,10 +257,10 @@ function fetcher(LLPage) {
         }
 
         // Fetch original page HTML...
-        const fetchResponse = await fetch(LLPage.url, fetchOptions);
+        const fetchResponse = await fetch(message.url, fetchOptions);
 
         // ...if status code is 503, 403, re-fetch page
-        if ((fetchResponse.status === 503  || fetchResponse.status === 403) && !LLPage.hasOwnProperty('doNotReFetch')) {
+        if ((fetchResponse.status === 503 || fetchResponse.status === 403) && !message.hasOwnProperty('doNotReFetch')) {
             response['reFetch'] = true;
             resolve(response);
             return;
@@ -272,12 +272,12 @@ function fetcher(LLPage) {
         // ...get page HTTP headers
         response.headers = Object.fromEntries(fetchResponse.headers.entries());
 
-        // Evaluate JS code and get the result (if any)
-        if (LLPage.actions) {
+        // Run action and get the result (if any).
+        if (Object.keys(message.actions).length) {
             const resultArr = [];
-            for (const index in LLPage.actions) {
-                for (const key in LLPage.actions[index]) {
-                    const result = await LLActions[key](LLPage.actions[index][key]);
+            for (const action in message.actions) {
+                if (LLActions[action]) {
+                    const result = await LLActions[action](message.actions[action]);
                     if (result) {
                         resultArr.push(result);
                     }
@@ -290,25 +290,26 @@ function fetcher(LLPage) {
         if (LLActionsScraped.length > 0) {
             // Get scraped data with actions
             response.dom = LLActionsScraped;
-
         } else {
             // Get original page DOM
             if (document.doctype) {
-                response.dom = new XMLSerializer().serializeToString(document.doctype) + document.getElementsByTagName('html')[0].outerHTML;
+                response.dom =
+                    new XMLSerializer().serializeToString(document.doctype) +
+                    document.getElementsByTagName('html')[0].outerHTML;
             } else {
                 response.dom = document.getElementsByTagName('html')[0].outerHTML;
             }
         }
 
         // Perform XHR tasks (if any)
-        if (LLPage.xhr) {
-            for (const xhr of LLPage.xhr) {
+        if (message.xhr) {
+            for (const xhr of message.xhr) {
                 const fetchResponse = await fetch(xhr.url, xhr.fetchOptions ? xhr.fetchOptions : {});
                 const fetchResponseText = await fetchResponse.text();
                 response.xhr.push({
-                    'url': xhr.url,
-                    'html': fetchResponseText
-                })
+                    url: xhr.url,
+                    html: fetchResponseText,
+                });
             }
         }
 

@@ -1,637 +1,1066 @@
-'use strict'
+'use strict';
+
+// Utils
+// ---------------------------------------------
+const debug = false;
+function log(...message) {
+    if (debug) {
+        console.log(...message);
+    }
+}
+
+function warn(...message) {
+    if (debug) {
+        console.warn(...message);
+    }
+}
 
 // Extension options
 // ---------------------------------------------
 
-// Get and set the default value for each checkbox option
+// Get and set default value for each checkbox option.
 const extensionOptions = {
     btDlAllFolder: true,
-    btDlFolder: false
-}
+    btDlFolder: false,
+};
 for (const key in extensionOptions) {
     chrome.storage.local.get(key, (res) => {
         if (res.hasOwnProperty(key)) {
-            extensionOptions[key] = res[key]
+            extensionOptions[key] = res[key];
         }
-    })
+    });
 }
 
 // Download
 // ---------------------------------------------
-let downloadNext = {}
+const maxActiveDownloads = 3;
+const activeDownloadIds = new Set();
+const filenameToDownloadInfo = new Map();
+const downloadIdToFilename = new Map();
+let remainingLinksUI = 0;
+let activeBatchPort = null;
+let activeMessage = {};
 
-chrome.downloads.onChanged.addListener((downloadDelta) => {
-    // Download ended with error or success
-    if (downloadDelta.hasOwnProperty('error') || downloadDelta.hasOwnProperty('endTime')) {
-        if (downloadNext[downloadDelta.id]) {
-            // Download next link
-            downloadLinks(downloadNext[downloadDelta.id].message, downloadNext[downloadDelta.id].index)
+function randomChars() {
+    const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345678901';
 
-            // Delete a completed download from downloadNext
-            delete (downloadNext[downloadDelta.id])
+    // Generate a random 32-bit unsigned integer.
+    const r = (Math.random() * 0x100000000) >>> 0;
+
+    // Extract 6 bits (values 0-63) four times using fast bitwise operations.
+    return CHARS[r & 63] + CHARS[(r >>> 6) & 63] + CHARS[(r >>> 12) & 63] + CHARS[(r >>> 18) & 63];
+}
+
+function getDownloadInfoByFilename(downloadItem) {
+    const filePath = downloadItem.filename;
+    let filename = filePath.substring(filePath.lastIndexOf('/') + 1);
+
+    if (!filenameToDownloadInfo.has(filename) && downloadIdToFilename.has(downloadItem.id)) {
+        filename = downloadIdToFilename.get(downloadItem.id);
+    }
+
+    downloadIdToFilename.delete(downloadItem.id);
+
+    if (filenameToDownloadInfo.has(filename)) {
+        return { filename, ...filenameToDownloadInfo.get(filename) };
+    } else {
+        warn(`Filename '${filename}' cannot be found in:`, [...filenameToDownloadInfo.entries()]);
+    }
+}
+
+chrome.downloads.onCreated.addListener((downloadItem) => {
+    // Download started.
+    log(`File download started(${activeDownloadIds.size}):`, downloadItem);
+
+    activeDownloadIds.add(downloadItem.id);
+});
+
+chrome.downloads.onDeterminingFilename.addListener(async (downloadItem, suggest) => {
+    // Download filename determinated.
+    log('downloadItem:', downloadItem);
+
+    // Get download info.
+    const downloadInfo = getDownloadInfoByFilename(downloadItem);
+    if (!downloadInfo) {
+        // All downloads that were not initiated by extension.
+        warn('Unknown download item:', downloadItem);
+        return;
+    }
+
+    let filename = downloadInfo.filename;
+
+    // Add folder to filename.
+    if (downloadInfo.folder) {
+        filename = downloadInfo.folder + '/' + filename;
+    }
+
+    // Set correct filename.
+    await suggest({
+        filename,
+        conflictAction: 'overwrite',
+    });
+
+    if (downloadInfo.tabId) {
+        // Close download tab, it's no longer needed.
+        try {
+            await chrome.tabs.remove(downloadInfo.tabId);
+            log('Tab closed:', downloadInfo.tabId);
+        } catch (e) {
+            log('Tab hase been already closed:', downloadInfo.tabId);
         }
     }
-})
 
-function downloadLinks(message, index = 0) {
-    // Get links
-    const links = message.downloadSingle || message.downloadMulti
+    return true;
+});
 
-    // All links have been downloaded
-    if (typeof links[index] === 'undefined') {
-        return
+chrome.downloads.onChanged.addListener((downloadDelta) => {
+    if (
+        downloadDelta.state &&
+        (downloadDelta.state.current === 'complete' || downloadDelta.state.current === 'interrupted')
+    ) {
+        // Download finished successfully.
+        // - or -
+        // Download was insterrupted by user or another reason.
+
+        chrome.downloads.search({ id: downloadDelta.id }, function (downloadItems) {
+            log('Download items:', downloadItems);
+
+            if (downloadDelta.state.current === 'complete') {
+                log(`File download finished(${activeDownloadIds.size}):`, downloadDelta.id);
+
+                // Only completed downloads are subtracted from remaining links in app UI.
+                remainingLinksUI--;
+            } else {
+                log(`File download interrupted(${activeDownloadIds.size}):`, downloadDelta.id);
+            }
+
+            // Whether download was completed or interrupted, it is no longer active.
+            activeDownloadIds.delete(downloadDelta.id);
+
+            if (!downloadItems || !downloadItems[0]) {
+                // Unexpected situation.
+                log(`Download delta (${downloadDelta.id}) has not download item.`);
+                removeHeadersAll();
+                return;
+            }
+
+            // Get download info by downloadItem. Required to:
+            // - Auto-uncheck selected item in app UI.
+            // - Remove headers for non-native downloads.
+            const downloadInfo = getDownloadInfoByFilename(downloadItems[0]);
+            let finalUrlIndex = '';
+
+            if (!downloadInfo) {
+                // All downloads that were not initiated by extension.
+                warn('Unknown download item:', downloadItems[0]);
+                return;
+            }
+
+            if (downloadInfo) {
+                // Set finalUrlIndex of downloaded file for UI.
+                finalUrlIndex = downloadInfo.isSingle ? '' : downloadInfo.linkIndex;
+
+                if (downloadInfo.headerInfoArr?.length) {
+                    for (const headerInfo of downloadInfo.headerInfoArr) {
+                        // Remove custom req/res HTTP headers for non-native downloads.
+                        removeHeaders(headerInfo.UUID);
+                    }
+                }
+
+                filenameToDownloadInfo.delete(downloadInfo.filename);
+            }
+
+            log('Final URL index:', finalUrlIndex);
+
+            if (activeBatchPort) {
+                // Notify app to update UI.
+                activeBatchPort.postMessage({
+                    event: 'DOWNLOAD_PROGRESS',
+                    target: 'app',
+                    remainingLinks: remainingLinksUI,
+                    finalUrlIndex,
+                    isDownloaded: downloadDelta.state.current === 'complete',
+                });
+            }
+
+            if (activeBatchPort && activeMessage.links?.length) {
+                // Download next link with delay to avoid request bursts.
+                setTimeout(() => {
+                    downloadLinks(activeMessage);
+                }, 500);
+            } else if (activeBatchPort && activeMessage.links?.length === 0) {
+                // All links have been sent to download queue, but downloading may still be in progress.
+                log('All files have been sent to queue.');
+                activeMessage = {};
+            }
+
+            if (!activeDownloadIds.size && !activeMessage.links) {
+                log('All files have been downloaded.');
+                filenameToDownloadInfo.clear();
+                activeBatchPort = null;
+            }
+        });
+    }
+});
+
+function normalizeFilename(name, ext) {
+    const normalizedFileName = name.replace(/[\/\(\)]/g, '-');
+    const normalizedFileExt = ext.replace(/[\/\(\)\.]/g, '');
+    let filename = normalizedFileName + '.' + normalizedFileExt;
+
+    for (const [key, val] of filenameToDownloadInfo) {
+        if (key === filename) {
+            //  Add random chars to filename when same file is already downloading.
+            filename = normalizedFileName + '_' + randomChars() + '.' + normalizedFileExt;
+        }
     }
 
-    // User cannot download any more links
-    if (links[index].url === 'exceeded') {
-        return
+    return filename;
+}
+
+function normalizeFolder(folder) {
+    return folder.replace(/[\(\)]/g, '-');
+}
+
+async function downloadLinks(message) {
+    const links = message.links;
+
+    if (!links) {
+        // Batch download have been interrupted by user.
+        return;
+    }
+
+    if (!links.length) {
+        // All links have been downloaded.
+        return;
+    }
+
+    if (links[links.length - 1].url === 'exceeded') {
+        // User can't download more links.
+        return;
     }
 
     // Is it a single download?
-    const single = !!message.downloadSingle
+    const isSingle = message.event === 'START_DOWNLOAD';
 
     // Should we create a download folder?
-    const createFolder = single && extensionOptions.btDlFolder || !single && extensionOptions.btDlAllFolder
+    const createFolder = (isSingle && extensionOptions.btDlFolder) || (!isSingle && extensionOptions.btDlAllFolder);
 
-    // Is it a native download?
-    // Download cannot be native if we need to set custom req/res HTTP headers
-    let isNativeDownload = true
-    let tmpHeaders = {}
+    // Are all downloads native or not?
+    // Download cannot be native if we need to set custom HTTP headers for download.
+    let isNativeDownload = true;
+    const headerObjArr = [];
     if (message.extActions && message.extActions.headers) {
-        if (message.extActions.headers.download && Object.keys(message.extActions.headers.download).length !== 0) {
-            isNativeDownload = false
-            decodeCookies(message.extActions.headers.download)
-            tmpHeaders = message.extActions.headers.download
-        }
-        else if (message.extActions.headers.both && Object.keys(message.extActions.headers.both).length !== 0) {
-            isNativeDownload = false
-            decodeCookies(message.extActions.headers.both)
-            tmpHeaders = message.extActions.headers.both
+        if (message.extActions.headers.download && message.extActions.headers.download.length) {
+            isNativeDownload = false;
+            for (const index in message.extActions.headers.download) {
+                decodeCookies(message.extActions.headers.download[index]);
+                headerObjArr.push(message.extActions.headers.download[index]);
+            }
+        } else if (message.extActions.headers.both && message.extActions.headers.both.length) {
+            isNativeDownload = false;
+            for (const index in message.extActions.headers.both) {
+                decodeCookies(message.extActions.headers.both[index]);
+                headerObjArr.push(message.extActions.headers.both[index]);
+            }
         }
     }
 
-    // Download using document element
+    // Download using tab.
     if (!isNativeDownload) {
-        // Find any Locoloader tab and init the download from it
-        chrome.tabs.query({
-            active: true,
-            currentWindow: true,
-            url: [
-                'https://www.locoloader.com/*',
-                'https://www.locoloader.test/*'
-            ]
-        }, (tabs) => {
-            // Did we find any Locoloader tab?
-            if (!tabs[0]) {
-                return
-            }
+        log('Non-native download.');
 
-            // Filename
-            let filename = links[index].filename.replaceAll('/', '-')
-            if (createFolder && links[index].folder) {
-                filename = links[index].folder + '/' + filename
-            }
+        // Find any Locoloader tab and init download from it.
+        chrome.tabs.query(
+            {
+                active: true,
+                currentWindow: true,
+                url: ['https://www.locoloader.com/*', 'https://www.locoloader.test/*'],
+            },
+            async (tabs) => {
+                // Did we find any Locoloader tab?
+                if (!tabs[0]) {
+                    log('No Locoloader tab found.');
+                    return;
+                }
 
-            // Set the download header
-            tmpHeaders.action.responseHeaders = [{
-                'header': 'content-disposition',
-                'operation': 'set',
-                'value': 'attachment; filename=' + filename
-            }]
+                // Get and remove link from links array.
+                const linkData = links.pop();
+                const link = linkData.link;
+                const linkIndex = linkData.index;
 
-            // Set custom req/res HTTP headers
-            const headerInfo = setHeaders(tmpHeaders.action, tmpHeaders.condition)
+                // URL
+                let url = link.link_url;
 
-            // Send a message to content.js to create the href and init the download
-            // console.log('Background.js sent message to content.js: ', {createHref: links[index].url})
-            chrome.tabs.sendMessage(tabs[0].id, {
-                createHref: links[index].url
-            }, (res) => {
-                // Got a response from content.js, that means the href was created and clicked
-                // console.log('Got response from content.js: ', res)
+                if (link.download === 'raw') {
+                    // Raw files live in memory, so there is no need to set custom headers to download them.
+                    // Localoader uses raw files only for custom M3U8 files.
 
-                // Remove custom HTTP req/res headers 200 ms after the download started
-                setTimeout(() => {
-                    removeHeaders(headerInfo.UUID)
-                }, 200)
+                    // Filename
+                    let filename = normalizeFilename(link.file_name, link.file_ext);
+                    if (createFolder && message.folder) {
+                        filename = normalizeFolder(message.folder) + '_' + filename;
+                    }
 
-                // Download next link
-                setTimeout(() => {
-                    downloadLinks(message, (index + 1))
-                }, 500)
-            })
-        })
+                    // Convert raw URL to Blob so Firefox can download it.
+                    url = `data:application/octet-stream;base64,${link.link_raw}`;
+
+                    // Save download info.
+                    const downloadInfo = {
+                        linkIndex,
+                        isSingle,
+                        folder: createFolder && message.folder ? normalizeFolder(message.folder) : '',
+                    };
+                    filenameToDownloadInfo.set(filename, downloadInfo);
+                    log('Saved:', filename, downloadInfo);
+
+                    // Init download.
+                    const downloadId = await chrome.downloads.download({
+                        url,
+                        filename,
+                        saveAs: false,
+                    });
+
+                    downloadIdToFilename.set(downloadId, filename);
+                }
+
+                if (link.download === 'url') {
+                    // Filename
+                    let filename = normalizeFilename(link.file_name, link.file_ext);
+
+                    // Create empty download tab.
+                    const tab = await chrome.tabs.create({ active: false });
+
+                    // Set headers only to download tab.
+                    headerObjArr.push({
+                        action: {
+                            type: 'modifyHeaders',
+                            responseHeaders: [
+                                {
+                                    header: 'content-disposition',
+                                    operation: 'set',
+                                    value: 'attachment; filename=' + filename,
+                                },
+                            ],
+                        },
+                        condition: {
+                            tabIds: [tab.id],
+                            resourceTypes: ['main_frame', 'media'],
+                        },
+                    });
+
+                    const headerInfoArr = [];
+                    for (const headerObj of headerObjArr) {
+                        headerObj.condition['tabIds'] = [tab.id];
+
+                        const headerInfo = await setHeaders(headerObj.action, headerObj.condition);
+                        if (headerInfo) {
+                            headerInfoArr.push(headerInfo);
+                        }
+                    }
+
+                    // Save download info.
+                    const downloadInfo = {
+                        linkIndex,
+                        isSingle,
+                        headerInfoArr,
+                        tabId: tab.id,
+                        folder: createFolder && message.folder ? normalizeFolder(message.folder) : '',
+                    };
+                    filenameToDownloadInfo.set(filename, downloadInfo);
+                    log('Saved:', filename, downloadInfo);
+
+                    // Update download tab.
+                    await chrome.tabs.update(tab.id, { url, active: false });
+                }
+            },
+        );
     }
 
-    // Download using the browser's native download function
+    // Download using native download function.
     if (isNativeDownload) {
-        // Init max 10 parallel downloads when the link index equals 0,
-        // then add next download when the previous download finishes
-        const maxParallelDownloads = 10
-        const downloadsToInit = index === 0 ? maxParallelDownloads : 1
+        log('Native download.');
+
+        // Init max parallel downloads.
+        const downloadsToInit = maxActiveDownloads - activeDownloadIds.size;
+        log(`Sent ${downloadsToInit} file to download queue.`);
+
         for (let i = 0; i < downloadsToInit; i++) {
-            // Skip non-existing links
-            if (!links[(index + i)]) {
-                continue
+            if (!links.length) {
+                // All links have been processed.
+                log('All links have been processed.');
+                break;
+            }
+
+            // Get and remove link from reversed links array.
+            const linkData = links.pop();
+            const link = linkData.link;
+            const linkIndex = linkData.index;
+
+            // URL
+            let url = link.link_url;
+            if (link.download === 'raw') {
+                url = `data:application/octet-stream;base64,${link.link_raw}`;
             }
 
             // Filename
-            let filename = links[(index + i)].filename.replaceAll('/', '-')
-            if (createFolder && links[(index + i)].folder) {
-                filename = links[(index + i)].folder + '/' + filename
-            }
+            let filename = normalizeFilename(link.file_name, link.file_ext);
+
+            // Save download info.
+            const downloadInfo = {
+                linkIndex,
+                isSingle,
+                folder: createFolder && message.folder ? normalizeFolder(message.folder) : '',
+            };
+            filenameToDownloadInfo.set(filename, downloadInfo);
+            log('Saved:', filename, downloadInfo);
 
             // Download
-            chrome.downloads.download({
-                url: links[(index + i)].url,
-                filename: filename,
-                saveAs: false
-            }, (downloadId) => {
-                // Once the file with the downloadId is downloaded, download the file with the index below
-                downloadNext[downloadId] = {
-                    'index': (index + i + maxParallelDownloads),
-                    'message': message,
-                }
-            })
+            const downloadId = await chrome.downloads.download({
+                url,
+                filename,
+                saveAs: false,
+            });
+
+            downloadIdToFilename.set(downloadId, filename);
         }
     }
 }
 
-// Open the pre-configured tab with fetcher.js
+// Open pre-configured tab with fetcher.js
 // ---------------------------------------------
-function openTab(page) {
+function openFetcher(message) {
     return new Promise(async (resolve) => {
+        const defaultResponse = [{
+            result: {
+                event: 'PRE_EXTRACTION',
+                target: 'app',
+                tabUUID: message.tabUUID,
+                url: message.url,
+                headers: {},
+                html: '',
+                dom: '',
+                actions: {
+                    err: [],
+                    result: [],
+                },
+                xhr: [],
+                windowURL: message.windowURL,
+            }
+        }];
 
-        // Open the background tab using page.url
-        chrome.tabs.create({
-            active: false,
-            url: page.url
-        }, (tab) => {
+        // Open background tab.
+        const tab = await chrome.tabs.create({ active: false });
 
-            // Monkeypatch MAIN JS code
-            chrome.scripting.executeScript({
-                world: 'MAIN',
-                target: { tabId: tab.id },
-                func: () => {
-                    // Console clear monkeypatch
-                    console.clear = () => {
+        // Set headers only to fetcher tab.
+        log('Received headers:', message.headers);
+        const headerInfoArr = [];
+        for (const headerObj of message.headers) {
+            headerObj.condition['tabIds'] = [tab.id];
+
+            const headerInfo = await setHeaders(headerObj.action, headerObj.condition);
+            if (headerInfo) {
+                headerInfoArr.push(headerInfo);
+            }
+        }
+
+        // Remove tab headers.
+        function cleanupHeaders(headerInfoArr) {
+            for (const headerInfo of headerInfoArr) {
+                removeHeaders(headerInfo.UUID);
+            }
+        }
+
+        // Set final tab URL.
+        await chrome.tabs.update(tab.id, { url: message.url, active: false });
+
+        // Wait for tab to complete URL update.
+        const waitForLoad = new Promise((resolve) => {
+            let timeoutId;
+
+            // Listen for successful updates.
+            function updateListener(tabId, changeInfo, currentTab) {
+                if (tabId === tab.id && changeInfo.status === 'complete') {
+                    if (currentTab.url && currentTab.url !== 'about:blank' && currentTab.url !== 'about:newtab') {
+                        cleanup();
+                        resolve(true);
+                        log(`Tab ${tab.id} loading complete.`);
                     }
                 }
-            }, () => {
+            }
 
-                // Add configuration for fetcher.js
-                chrome.scripting.executeScript({
-                    world: 'MAIN',
-                    target: { tabId: tab.id },
-                    func: (page) => {
-                        document.LLPage = page
-                    },
-                    args: [page],
-                }, () => {
+            // Listen for premature closures.
+            function closeListener(closedTabId) {
+                if (closedTabId === tab.id) {
+                    cleanup();
+                    resolve(false);
+                    log(`Tab ${tab.id} closed prematurely.`);
+                }
+            }
 
-                    // Run and resolve fetcher.js
-                    chrome.scripting.executeScript({
-                        world: 'MAIN',
-                        target: { tabId: tab.id },
-                        files: ['fetcher.js'],
-                    }, (result) => {
-                        // console.log('Tab in background.js received result from fetcher.js: ', result)
+            // Centralized cleanup to prevent memory leaks.
+            function cleanup() {
+                chrome.tabs.onUpdated.removeListener(updateListener);
+                chrome.tabs.onRemoved.removeListener(closeListener);
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                }
+            }
 
-                        // If the response contains reFetch attribute, it means that the page should be re-fetched
-                        if (result[0].result.reFetch) {
-                            setTimeout(async () => {
-                                // Close the fetched tab
-                                chrome.tabs.remove(tab.id)
+            chrome.tabs.onUpdated.addListener(updateListener);
+            chrome.tabs.onRemoved.addListener(closeListener);
 
-                                // Only re-fetch once
-                                page['doNotReFetch'] = true
+            // Failsafe: In case it finished loading before listeners attached.
+            chrome.tabs.get(tab.id, (currentTab) => {
+                if (currentTab.status === 'complete' && currentTab.url && currentTab.url !== 'about:blank' && currentTab.url !== 'about:newtab') {
+                    cleanup();
+                    resolve(true);
+                    log(`Tab ${tab.id} finished loading before listeners attached.`);
+                }
+            });
 
-                                // Re-open, re-fetch and return result from fetcher.js
-                                resolve(await openTab(page))
-                            }, 9000)
+            // Ultimate failsafe: Timeout after 120 seconds to prevent infinite hanging.
+            timeoutId = setTimeout(() => {
+                cleanup();
+                resolve(false);
+                log(`Timeout: Tab ${tab.id} took too long to load.`);
+            }, 120000);
+        });
 
-                        } else {
-                            // Close the fetched tab
-                            chrome.tabs.remove(tab.id)
+        if (!await waitForLoad) {
+            cleanupHeaders(headerInfoArr);
+            return resolve(defaultResponse);
+        }
 
-                            // Return result from fetcher.js
-                            resolve(result)
-                        }
-                    })
-                })
-            })
-        })
-    })
+        let injectionResult;
+
+        // Monkeypatch console.clear().
+        injectionResult = await ensureExecuteScript({
+            world: 'MAIN',
+            target: { tabId: tab.id },
+            func: () => {
+                console.clear = () => { };
+            },
+        });
+        if (!injectionResult) {
+            log(`Injecting monkeypatch failed.`);
+            cleanupHeaders(headerInfoArr);
+            return resolve(defaultResponse);
+        }
+
+        // Configuration for fetcher.js.
+        injectionResult = await ensureExecuteScript({
+            world: 'MAIN',
+            target: { tabId: tab.id },
+            func: (message) => {
+                document.LLPage = message;
+            },
+            args: [message],
+        });
+        if (!injectionResult) {
+            log(`Injecting message failed.`);
+            cleanupHeaders(headerInfoArr);
+            return resolve(defaultResponse);
+        }
+
+        // Run fetcher.js.
+        const result = await ensureExecuteScript({
+            world: 'MAIN',
+            target: { tabId: tab.id },
+            files: ['fetcher.js'],
+        });
+
+        log('Tab in background.js received result from fetcher.js:', result);
+
+        // Remove tab headers.
+        cleanupHeaders(headerInfoArr);
+
+        try {
+            // Close fetched tab.
+            await chrome.tabs.remove(tab.id);
+        } catch (err) {
+            // Tab has been closed prematurely.
+            return resolve(defaultResponse);
+        }
+
+        // If response contains reFetch attribute, it means that page should be re-fetched.
+        if (result && result[0].result.reFetch) {
+            setTimeout(async () => {
+                // Only re-fetch once.
+                message['doNotReFetch'] = true;
+
+                // Re-open, re-fetch and return result from fetcher.js.
+                resolve(await openFetcher(message));
+            }, 2000);
+        } else {
+            // Return result from fetcher.js.
+            resolve(result);
+        }
+    });
+}
+
+async function ensureExecuteScript(scriptOptions, maxRetries = 5, delayMs = 50) {
+    let lastError;
+
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await chrome.scripting.executeScript(scriptOptions);
+        } catch (error) {
+            lastError = error;
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+    }
+
+    log(`Script injection failed after ${maxRetries} attempts. Last error: ${lastError.message}`);
+    return false;
 }
 
 // Listening to message
 // ---------------------------------------------
-chrome.runtime.onMessage.addListener(async (message) => {
-    // console.log('Background.js received message from content.js:', message)
+chrome.runtime.onMessage.addListener((message, sender) => {
+    log('Background.js received message from content script:', message);
+    log('Sender:', sender);
+    log('Runtime ID:', chrome.runtime.id);
 
-    // Set options
-    if (message.option === true) {
-        extensionOptions[message.optionName] = message.optionVal
+    // Allow only trusted messages.
+    if (
+        sender.origin !== 'https://www.locoloader.com' &&
+        sender.origin !== 'https://www.locoloader.test' &&
+        sender.id !== chrome.runtime.id
+    ) {
+        return;
     }
 
-    // Initiate preview
-    if (message.previewURL) {
-        // Update extension actions
-        const extActions = message.extActions
-
-        // Set the preview link headers, we got from extension actions
-        if (extActions && extActions.headers) {
-            if (extActions.headers.preview && (extActions.headers.preview.action.requestHeaders || extActions.headers.preview.action.responseHeaders)) {
-                decodeCookies(extActions.headers.preview)
-                const headerInfo = setHeaders(extActions.headers.preview.action, extActions.headers.preview.condition)
-            } else if (extActions.headers.both && (extActions.headers.both.action.requestHeaders || extActions.headers.both.action.responseHeaders)) {
-                decodeCookies(extActions.headers.both)
-                const headerInfo = setHeaders(extActions.headers.both.action, extActions.headers.both.condition)
-            }
-        }
-
-        let tabUrl = message.previewURL
-
-        // Preview URLs inside player.
-        if (message.player === 'true' || (extActions && extActions.playerPreview)) {
-            const sessionId = 'preview_' + crypto.randomUUID()
-            tabUrl = chrome.runtime.getURL(`player.html?data=${message.linkType}&sessionId=${sessionId}`)
-            chrome.storage.session.set({ [sessionId]: message.previewURL });
-        }
-
-        setTimeout(() => {
-            chrome.tabs.create({
-                url: tabUrl,
-                active: true,
-            }, (res) => {
-                // Remove declarativeNetRequest session rules (remove preview link headers)
-                if (typeof headerInfo !== 'undefined') {
-                    setTimeout(() => {
-                        removeHeaders(headerInfo.UUID)
-                    }, 200)
-                }
-            })
-        }, 100)
+    // Accept only message addressed to extension.
+    if (message.target !== 'ext') {
+        return;
     }
 
-    // Initiate download of a single file...
-    if (message.downloadSingle && message.now === true) {
-        downloadLinks(message)
+    // Set options.
+    if (message.event === 'UPDATE_OPTIONS') {
+        extensionOptions[message.optionName] = message.optionVal;
     }
-
-    // Initiate download of multiple files...
-    if (message.downloadMulti && message.now === true) {
-        downloadLinks(message)
-    }
-})
+});
 
 // Listening to an external message
 // ---------------------------------------------
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-    // console.log('Background.js received message from App.js:', message)
-    // Allow only external messages from trusted origins
+    log('Background.js received message from app.js:', message);
+
+    // Allow only trusted messages.
     if (sender.origin !== 'https://www.locoloader.com' && sender.origin !== 'https://www.locoloader.test') {
-        return
+        return true;
     }
 
-    // Update HTTP headers
-    if (message.type && message.type === 'ext-headers') {
+    if (message.type === 'ext-fetch') {
         const job = async () => {
-            if (message.setHeaders.length > 0) {
-                // Debug logs, uncomment for testing
-                // console.log('Received headers:', message.setHeaders)
-                for (let setHeaderObj of message.setHeaders) {
-                    // Debug logs, uncomment for testing
-                    // console.log('Header obj:', setHeaderObj)
-                    setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
-                }
-            }
-
-            // Response
-            sendResponse({
-                'msg': 'headers set',
-            })
-        }
-
-        job()
-    }
-
-    // Fetch the specified URL in a new tab
-    if (message.type && message.type === 'ext-tab') {
-        const job = async () => {
-            // Set tab headers
-            if (message.headers.action && message.headers.condition) {
-                // console.log('Setting headers: ', message.headers)
-                const headerInfo = setHeaders(message.headers.action, message.headers.condition)
-            }
-
-            // Set HTTP headers
-            if (message.setHeaders.length > 0) {
-                // console.log('Received headers:', message.setHeaders)
-                for (let setHeaderObj of message.setHeaders) {
-                    // console.log('Header obj:', setHeaderObj)
-                    setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
-                }
-            }
-
-            // Request
-            const pageObj = await openTab(message)
-
-            // Remove request headers
-            if (typeof headerInfo !== 'undefined' && message.headers.action && message.headers.condition) {
-                removeHeaders(headerInfo.UUID)
-            }
-
-            // Response
-            sendResponse(pageObj ? pageObj[0].result : { html: '' })
-        }
-
-        job()
-    }
-
-    // Fetch the specified URL inline
-    if (message.type && message.type === 'ext-fetch') {
-        const job = async () => {
-            // Default response
+            // Default response.
             const pageObj = {
-                'url': message.url,
-                'headers': {},
-                'html': '',
-            }
-
-            // Set custom permanent HTTP headers
-            if (message.setHeaders && message.setHeaders.length > 0) {
-                // Debug logs, uncomment for testing
-                // console.log('Received headers:', message.setHeaders)
-                for (let setHeaderObj of message.setHeaders) {
-                    // Debug logs, uncomment for testing
-                    // console.log('Header obj:', setHeaderObj)
-                    setHeaders(setHeaderObj.action, setHeaderObj.condition, true)
-                }
-            }
+                event: 'PRE_EXTRACTION',
+                target: 'app',
+                url: message.url,
+                headers: {},
+                html: '',
+            };
 
             // Set request headers...
-            let requestHeaders = []
+            let requestHeaders = [];
 
             // ...other HTTP headers
             if (message.fetchOptions.headers && Object.keys(message.fetchOptions.headers)) {
                 for (const [key, val] in message.fetchOptions.headers) {
                     requestHeaders.push({
-                        'header': key,
-                        'operation': 'set',
-                        'value': val
-                    })
+                        header: key,
+                        operation: 'set',
+                        value: val,
+                    });
                 }
             }
 
             // ...referer
             if (message.fetchOptions.referrer) {
                 requestHeaders.push({
-                    'header': 'Referer',
-                    'operation': 'set',
-                    'value': message.fetchOptions.referrer
-                })
+                    header: 'Referer',
+                    operation: 'set',
+                    value: message.fetchOptions.referrer,
+                });
             }
 
             // ...referer policy
             if (message.fetchOptions.referrerPolicy) {
                 requestHeaders.push({
-                    'header': 'Referrer-Policy',
-                    'operation': 'set',
-                    'value': message.fetchOptions.referrerPolicy
-                })
+                    header: 'Referrer-Policy',
+                    operation: 'set',
+                    value: message.fetchOptions.referrerPolicy,
+                });
             }
 
             // ...set headers
+            let headerInfo = {};
             if (requestHeaders.length) {
-                const headerInfo = setHeaders({
-                    'type': 'modifyHeaders',
-                    'requestHeaders': requestHeaders,
-                }, {
-                    'resourceTypes': ['xmlhttprequest']
-                })
+                headerInfo = await setHeaders(
+                    {
+                        type: 'modifyHeaders',
+                        requestHeaders: requestHeaders,
+                    },
+                    {
+                        resourceTypes: ['xmlhttprequest'],
+                        urlFilter: `|${message.url}|`,
+                    },
+                );
             }
 
-            // Request
-            const fetchResponse = await fetch(message.url, message.fetchOptions ? message.fetchOptions : {})
+            let fetchResponse = null;
+            try {
+                // Send request.
+                fetchResponse = await fetch(message.url, message.fetchOptions ? message.fetchOptions : {});
+            } catch (e) { }
 
-            // Remove request headers
-            if (typeof headerInfo !== 'undefined') {
-                removeHeaders(headerInfo.UUID)
+            // Remove request headers.
+            if (typeof headerInfo.UUID !== 'undefined') {
+                removeHeaders(headerInfo.UUID);
+            }
+
+            if (!fetchResponse) {
+                sendResponse(pageObj);
+                return;
             }
 
             // ...get page HTML
-            pageObj.html = await fetchResponse.text()
+            pageObj.html = await fetchResponse.text();
 
             // ...get page HTTP headers
-            pageObj.headers = Object.fromEntries(fetchResponse.headers.entries())
+            pageObj.headers = Object.fromEntries(fetchResponse.headers.entries());
 
-            // Response...
-            // Send response back to Locoloader
-            sendResponse(pageObj)
-        }
+            // Send response.
+            sendResponse(pageObj);
+        };
 
-        job()
+        job();
     }
 
-    // Mandatory: Keeps the message channel open for async response
-    return true
-})
+    if (message.type === 'ext-tab') {
+        const job = async () => {
+            const pageObj = await openFetcher(message);
+            log('Pre-extraction data:', pageObj);
+
+            // Response.
+            sendResponse(pageObj ? pageObj[0]?.result : { event: 'PRE_EXTRACTION', target: 'app', html: '' });
+        };
+
+        job();
+    }
+
+    // Mandatory: Keeps message channel open for async response.
+    return true;
+});
+
+chrome.runtime.onConnectExternal.addListener((port) => {
+    log('Background.js connected to app.js:', port);
+
+    // Allow only trusted connections.
+    if (port.sender.origin !== 'https://www.locoloader.com' && port.sender.origin !== 'https://www.locoloader.test') {
+        return;
+    }
+
+    port.onDisconnect.addListener(() => {
+        if (chrome.runtime.lastError) {
+            log('Port disconnected:', chrome.runtime.lastError.message);
+        }
+    });
+
+    port.onMessage.addListener((message) => {
+        log('RECEIVED:', message.event);
+
+        if (message.event === 'START_DOWNLOAD') {
+            if (activeBatchPort) {
+                port.postMessage({ event: 'ERROR_ALREADY_DOWNLOADING', target: 'app' });
+                return;
+            }
+
+            downloadLinks(message);
+        }
+
+        if (message.event === 'START_BATCH_DOWNLOAD') {
+            if (activeBatchPort) {
+                port.postMessage({ event: 'ERROR_ALREADY_DOWNLOADING', target: 'app' });
+                return;
+            }
+
+            activeBatchPort = port;
+            activeMessage = message;
+            remainingLinksUI = message.links.length;
+
+            log('Active port(1):', activeBatchPort);
+
+            downloadLinks(activeMessage);
+        }
+
+        if (message.event === 'STOP_BATCH_DOWNLOAD') {
+            // Stop current downloads.
+            activeDownloadIds.forEach((id) => chrome.downloads.cancel(id));
+
+            if (activeBatchPort) {
+                activeBatchPort.postMessage({
+                    event: 'DOWNLOAD_PROGRESS',
+                    target: 'app',
+                    remainingLinks: remainingLinksUI,
+                    finalUrlIndex: '',
+                });
+            }
+
+            activeBatchPort = null;
+            activeMessage = {};
+        }
+
+        if (message.event === 'PREVIEW') {
+            const job = async () => {
+                // Determine preview tab URL.
+                let tabUrl = message.previewURL;
+
+                if (
+                    message.player === 'true' ||
+                    (message.extActions && message.extActions.playerPreview) ||
+                    message.linkType === 'raw'
+                ) {
+                    // Use player.html for preview instead of native player.
+                    const sessionId = 'preview_' + crypto.randomUUID();
+                    tabUrl = chrome.runtime.getURL(`player.html?data=${message.linkType}&sessionId=${sessionId}`);
+                    chrome.storage.session.set({ [sessionId]: message.previewURL });
+                }
+
+                // Set preview link headers retrieved from extension actions.
+                const headerObjArr = [];
+                if (message.extActions && message.extActions.headers) {
+                    if (message.extActions.headers.preview && message.extActions.headers.preview.length) {
+                        for (const index in message.extActions.headers.preview) {
+                            decodeCookies(message.extActions.headers.preview[index]);
+                            headerObjArr.push(message.extActions.headers.preview[index]);
+                        }
+                    } else if (message.extActions.headers.both && message.extActions.headers.both.length) {
+                        for (const index in message.extActions.headers.both) {
+                            decodeCookies(message.extActions.headers.both[index]);
+                            headerObjArr.push(message.extActions.headers.both[index]);
+                        }
+                    }
+                }
+
+                // Create empty preview tab.
+                const tab = await chrome.tabs.create({ active: false });
+
+                // Set headers only to preview tab.
+                const headerInfoArr = [];
+                for (const headerObj of headerObjArr) {
+                    headerObj.condition['tabIds'] = [tab.id];
+
+                    const headerInfo = await setHeaders(headerObj.action, headerObj.condition);
+                    if (headerInfo) {
+                        headerInfoArr.push(headerInfo);
+                    }
+                }
+
+                const closeTabListener = (tabId) => {
+                    if (tabId === tab.id) {
+                        // Remove declarativeNetRequest session rules (remove preview link headers).
+                        for (const headerInfo of headerInfoArr) {
+                            removeHeaders(headerInfo.UUID);
+                        }
+                        chrome.tabs.onRemoved.removeListener(closeTabListener);
+                        log('Preview tab closed id:', tabId);
+                    }
+                };
+
+                chrome.tabs.onRemoved.addListener(closeTabListener);
+
+                // Update preview tab.
+                await chrome.tabs.update(tab.id, { url: tabUrl, active: true });
+            };
+
+            job();
+        }
+    });
+});
 
 // HTTP request / response modifications
 // ---------------------------------------------
 
-// Decode the HTTP request cookie header value
+// Decode HTTP request cookie header value.
 function decodeCookies(headersObj) {
     if (headersObj.action && headersObj.action.requestHeaders) {
         for (const key in headersObj.action.requestHeaders) {
             if (headersObj.action.requestHeaders[key].header === 'cookie') {
-                headersObj.action.requestHeaders[key].value = decodeURIComponent(headersObj.action.requestHeaders[key].value)
+                headersObj.action.requestHeaders[key].value = decodeURIComponent(
+                    headersObj.action.requestHeaders[key].value,
+                );
             }
         }
     }
 }
 
-// Initial HTTP headers state
-let headerCount = 0
-let headerHash = {}
+// Initial HTTP headers state.
+let headerCount = 0;
+let headerHash = {};
 
-// Fast and good enough hashing function to generate the HTTP header UID
+// Fast and good enough hashing function to generate HTTP header UUID.
 function hash(string) {
-    let hash = 0, i, chr
-    if (string.length === 0) return hash;
-    for (i = 0; i < string.length; i++) {
-        chr = string.charCodeAt(i)
-        hash = ((hash << 5) - hash) + chr
-        hash |= 0
+    let hash = 0;
+    for (let i = 0; i < string.length; i++) {
+        hash = (hash << 5) - hash + string.charCodeAt(i);
+        hash |= 0;
     }
-    return hash
+    return hash >>> 0;
 }
 
 // Set declarativeNetRequest HTTP headers
-function setHeaders(action, condition, permanent = false) {
-    // Generate header uid
-    const jsonString = JSON.stringify({ 'action': action, 'condition': condition })
-    const headerUUID = hash(jsonString)
-
-    // Do not set the same header multiple times
-    if (headerHash[headerUUID]) {
-        return headerHash[headerUUID]
+async function setHeaders(action, condition, permanent = false) {
+    if (!action || !condition) {
+        // Cannot update session rules without both action and condition.
+        return;
     }
 
-    // Update the number of active headers
-    headerCount++
+    // Generate header uid.
+    const jsonString = JSON.stringify({ action, condition });
+    const headerUUID = hash(jsonString);
 
-    // Header info JSON
+    // Do not set same header multiple times.
+    if (headerHash[headerUUID]) {
+        return headerHash[headerUUID];
+    }
+
+    // Update number of active headers.
+    headerCount++;
+
+    // Header info JSON.
     const headerInfo = {
         id: headerCount,
         UUID: headerUUID,
-        permanent: permanent
-    }
+        permanent: permanent,
+    };
 
-    // Update the state of active headers
-    headerHash[headerUUID] = headerInfo
+    // Store active header info.
+    headerHash[headerUUID] = headerInfo;
 
-    // Debug logs, uncomment for testing
-    // console.log('Set headers (id): ', headerInfo.id)
-    // console.log('Set headers (hash): ', headerInfo.UUID)
-    // console.log('Set headers (permanent): ', headerInfo.permanent)
-    // console.log('Set headers (action): ', action)
-    // console.log('Set headers (condition): ', condition)
+    log('Set headers (ruleId):', headerInfo.id);
+    log('Set headers (hash):', headerInfo.UUID);
+    log('Set headers (permanent):', headerInfo.permanent);
+    log('Set headers (action):', action);
+    log('Set headers (condition):', condition);
 
-    // Set HTTP header
-    chrome.declarativeNetRequest.updateSessionRules({
+    // Set HTTP header.
+    await chrome.declarativeNetRequest.updateSessionRules({
         addRules: [
             {
-                'id': headerInfo.id,
-                'priority': 1,
-                'action': action,
-                'condition': condition
-            }
+                id: headerInfo.id,
+                priority: 1,
+                action,
+                condition,
+            },
         ],
-        removeRuleIds: [headerInfo.id]
-    })
+        removeRuleIds: [headerInfo.id],
+    });
 
-    // Return header info
-    return headerInfo
+    // Return header info.
+    return headerInfo;
 }
 
 // Remove declarativeNetRequest HTTP headers incl. permanent ones if set to true
 function removeHeaders(headerUUID, removePermanent = false) {
-
-    // Do not try removing non-existing headers
+    // Do not try removing non-existing headers.
     if (!headerHash[headerUUID]) {
-        return
+        return;
     }
 
-    // Do not remove permanent headers if they are not required
+    // Do not remove permanent headers if not set to true.
     if (!headerHash[headerUUID].permanent || (headerHash[headerUUID].permanent && removePermanent)) {
-        // Debug logs, uncomment for testing
-        // console.log('Remove headers (id): ', headerHash[headerUUID].id)
-        // console.log('Remove headers (hash): ', headerHash[headerUUID].UUID)
-        // console.log('Remove headers (permanent): ', headerHash[headerUUID].permanent)
+        log('Remove headers (ruleId):', headerHash[headerUUID].id);
+        log('Remove headers (hash):', headerHash[headerUUID].UUID);
+        log('Remove headers (permanent):', headerHash[headerUUID].permanent);
 
         chrome.declarativeNetRequest.updateSessionRules({
-            removeRuleIds: [headerHash[headerUUID].id]
-        })
+            removeRuleIds: [headerHash[headerUUID].id],
+        });
 
-        delete headerHash[headerUUID]
-        headerCount--
+        delete headerHash[headerUUID];
+        headerCount--;
     }
 }
 
 // Remove all declarativeNetRequest HTTP headers incl. permanent ones if set to true
-function removeHeadersAll(permanent = false) {
+async function removeHeadersAll() {
     for (const key in headerHash) {
-        removeHeaders(headerHash[key].UUID, permanent)
+        removeHeaders(headerHash[key].UUID, true);
     }
 
-    // Debug logs, uncomment for testing
-    // console.log('Number of active headers: ', headerCount)
+    const existingRules = await chrome.declarativeNetRequest.getSessionRules();
+    const existingRuleIds = existingRules.map((rule) => rule.id);
+    chrome.declarativeNetRequest.updateSessionRules({
+        removeRuleIds: existingRuleIds,
+    });
+
+    log('All headers removed:', headerCount);
 }
 
-// Remove all declarativeNetRequest session rules
-// Load/reload to make sure there are no hanging rules
-removeHeadersAll(true)
+// Remove all declarativeNetRequest session rules.
+removeHeadersAll();
 
-// Debug the matched net requests
-// This feature requires 'declarativeNetRequestFeedback' permission in manifest.json
-// todo Comment this out for production
+// Debug matched net requests.
+// This feature requires 'declarativeNetRequestFeedback' permission in manifest.json.
+// todo Comment this out for production.
 // chrome.declarativeNetRequest.onRuleMatchedDebug.addListener((info) => {
-//     console.log(info)
-// })
+//     log("onRuleMatchedDebug:", info);
+// });
 
-// Content scripts
+// Extension management.
 // ---------------------------------------------
 
-// Inject content scripts into open Locoloader tabs and reload them
-function injectContentScripts() {
-    chrome.tabs.query({
-        url: [
-            'https://www.locoloader.com/*',
-            'https://www.locoloader.test/*'
-        ]
-    }, (tabs) => {
-        tabs.forEach((tab) => {
-            chrome.scripting
-                .executeScript({
-                    target: { tabId: tab.id },
-                    files: ['content.js']
-                }, (result) => {
-                    // console.log('Injected content scripts when loading/reloading the extension to: ' + tab.id)
-                    // console.log('Created connection when loading/reloading the extension to: ' + tab.id)
-                    chrome.tabs.connect(tab.id)
+chrome.runtime.onInstalled.addListener((details) => {
+    chrome.tabs.query(
+        {
+            url: ['https://www.locoloader.com/*', 'https://www.locoloader.test/*'],
+        },
+        (tabs) => {
+            if (
+                !tabs.length &&
+                details.reason &&
+                chrome.runtime.OnInstalledReason &&
+                chrome.runtime.OnInstalledReason.INSTALL &&
+                details.reason === chrome.runtime.OnInstalledReason.INSTALL
+            ) {
+                // Open Locoloader page upon installation if no other Locoloader pages are open.
+                chrome.tabs.create({ url: 'https://www.locoloader.com' });
+            }
 
-                    setTimeout(() => {
-                        // console.log('Tab reloaded: ' + tab.id)
-                        chrome.tabs.reload(tab.id)
-                    }, 100)
-                })
-        })
-    })
-}
+            // Reload Locoloader pages when user installs extension.
+            for (const tab of tabs) {
+                setTimeout(() => {
+                    log('Tab reloaded:' + tab.id);
+                    chrome.tabs.reload(tab.id);
+                }, 100);
+            }
+        },
+    );
+});
 
-async function unregisterAllDynamicContentScripts() {
-    try {
-        const scripts = await chrome.scripting.getRegisteredContentScripts()
-        // console.log('All registered content scripts:', scripts)
-        const scriptIds = scripts.map(script => script.id)
-        // console.log('Content scripts to unload:', scriptIds)
-        if (scriptIds.length) {
-            return chrome.scripting.unregisterContentScripts(scriptIds)
-        } else {
-            return false
-        }
-    } catch (err) {
-        throw new Error(err)
-    }
-}
-chrome.runtime.connect().onDisconnect.addListener(unregisterAllDynamicContentScripts)
-
-// Fired when the extension is installed and when the extension or Chrome is updated.
-// Fired also when the extension is reloaded.
-function onInstalled(details) {
-    injectContentScripts()
-
-    // Open Locoloader page when extension is installed for the first time
-    if (details.reason && chrome.runtime.OnInstalledReason && chrome.runtime.OnInstalledReason.INSTALL && details.reason === chrome.runtime.OnInstalledReason.INSTALL) {
-        chrome.tabs.create({ url: 'https://www.locoloader.com' })
-    }
-}
-chrome.runtime.onInstalled.addListener(onInstalled)
-
-// Fired when user enables the extension
-function onEnabled(extension) {
+// Reload Locoloader pages when user enables extension.
+chrome.management.onEnabled.addListener((extension) => {
     if (extension.id === chrome.runtime.id) {
-        injectContentScripts()
+        chrome.tabs.query(
+            {
+                url: ['https://www.locoloader.com/*', 'https://www.locoloader.test/*'],
+            },
+            (tabs) => {
+                for (const tab of tabs) {
+                    setTimeout(() => {
+                        log('Tab reloaded:' + tab.id);
+                        chrome.tabs.reload(tab.id);
+                    }, 100);
+                }
+            },
+        );
     }
-}
-chrome.management.onEnabled.addListener(onEnabled)
+});
 
-// Auto-update
-// ---------------------------------------------
-
-// Automatically update the extension as soon as possible
+// Automatically update extension as soon as possible.
 chrome.runtime.onUpdateAvailable.addListener(() => {
-    chrome.runtime.reload()
-})
+    chrome.runtime.reload();
+});
