@@ -1,9 +1,9 @@
 (async () => {
     const params = new URLSearchParams(location.search);
-    const sessionId = params.get('sessionId');
+    const previewId = params.get('previewId');
     const linkType = params.get('data');
 
-    if (!sessionId) {
+    if (!previewId) {
         document.body.textContent = 'Error: Missing session ID(1).';
         return;
     }
@@ -13,9 +13,9 @@
         return;
     }
 
-    const result = await chrome.storage.session.get(sessionId);
-    if (!result || !result[sessionId]) {
-        document.body.textContent = `Error: Session ID does not exist: ${sessionId}`;
+    const result = await chrome.storage.session.get(previewId);
+    if (!result || !result[previewId]) {
+        document.body.textContent = `Error: Session ID does not exist: ${previewId}`;
         return;
     }
 
@@ -30,7 +30,7 @@
         // Raw text manifests are always HLS
         isHls = true;
 
-        const byteCharacters = atob(result[sessionId]);
+        const byteCharacters = atob(result[previewId]);
         const byteNumbers = new Array(byteCharacters.length);
         for (let i = 0; i < byteCharacters.length; i++) {
             byteNumbers[i] = byteCharacters.charCodeAt(i);
@@ -44,7 +44,7 @@
         sourceUrl = URL.createObjectURL(blob);
         console.log('Manifest created from raw data. Size in bytes:', byteArray.length);
     } else {
-        sourceUrl = result[sessionId];
+        sourceUrl = result[previewId];
 
         // Check if the URL points to an HLS playlist
         if (sourceUrl.toLowerCase().includes('.m3u')) {

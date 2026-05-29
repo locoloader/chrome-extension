@@ -824,9 +824,9 @@ chrome.runtime.onConnectExternal.addListener((port) => {
                     message.linkType === 'raw'
                 ) {
                     // Use player.html for preview instead of native player.
-                    const sessionId = 'preview_' + crypto.randomUUID();
-                    tabUrl = chrome.runtime.getURL(`player.html?data=${message.linkType}&sessionId=${sessionId}`);
-                    chrome.storage.session.set({ [sessionId]: message.previewURL });
+                    const previewId = 'preview_' + crypto.randomUUID();
+                    tabUrl = chrome.runtime.getURL(`player.html?data=${message.linkType}&previewId=${previewId}`);
+                    chrome.storage.session.set({ [previewId]: message.previewURL });
                 }
 
                 // Set preview link headers retrieved from extension actions.
