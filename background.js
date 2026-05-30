@@ -33,7 +33,6 @@ for (const key in extensionOptions) {
 
 // Download
 // ---------------------------------------------
-const maxActiveDownloads = 3;
 const activeDownloadIds = new Set();
 const filenameToDownloadInfo = new Map();
 const downloadIdToFilename = new Map();
@@ -184,10 +183,13 @@ chrome.downloads.onChanged.addListener((downloadDelta) => {
             }
 
             if (activeBatchPort && activeMessage.links?.length) {
-                // Download next link with delay to avoid request bursts.
+                // Download next link.
                 setTimeout(() => {
-                    downloadLinks(activeMessage);
-                }, 500);
+                    // Only trigger if the batch wasn't cancelled during the delay.
+                    if (activeBatchPort && activeMessage.links?.length) {
+                        downloadLinks(activeMessage, 1);
+                    }
+                }, 1000);
             } else if (activeBatchPort && activeMessage.links?.length === 0) {
                 // All links have been sent to download queue, but downloading may still be in progress.
                 log('All files have been sent to queue.');
@@ -222,7 +224,7 @@ function normalizeFolder(folder) {
     return folder.replace(/[\(\)]/g, '-');
 }
 
-async function downloadLinks(message) {
+async function downloadLinks(message, maxConcurrentDownloads = 3) {
     const links = message.links;
 
     if (!links) {
@@ -381,16 +383,10 @@ async function downloadLinks(message) {
     if (isNativeDownload) {
         log('Native download.');
 
-        // Init max parallel downloads.
-        const downloadsToInit = maxActiveDownloads - activeDownloadIds.size;
-        log(`Sent ${downloadsToInit} file to download queue.`);
-
-        for (let i = 0; i < downloadsToInit; i++) {
-            if (!links.length) {
-                // All links have been processed.
-                log('All links have been processed.');
-                break;
-            }
+        // Init max concurrent downloads.
+        while (links.length > 0 && maxConcurrentDownloads) {
+            // Decrease number of concurrent downloads.
+            maxConcurrentDownloads--;
 
             // Get and remove link from reversed links array.
             const linkData = links.pop();
@@ -770,7 +766,7 @@ chrome.runtime.onConnectExternal.addListener((port) => {
     });
 
     port.onMessage.addListener((message) => {
-        log('RECEIVED:', message.event);
+        log('RECEIVED:', message);
 
         if (message.event === 'START_DOWNLOAD') {
             if (activeBatchPort) {
