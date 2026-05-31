@@ -36,6 +36,7 @@ for (const key in extensionOptions) {
 const activeDownloadIds = new Set();
 const filenameToDownloadInfo = new Map();
 const downloadIdToFilename = new Map();
+let pendingDownloads = 0;
 let remainingLinksUI = 0;
 let activeBatchPort = null;
 let activeMessage = {};
@@ -51,10 +52,11 @@ function randomChars() {
 }
 
 function getDownloadInfoByFilename(downloadItem) {
-    const filePath = downloadItem.filename;
+    const filePath = downloadItem.filename.replace(/\\/g, '/');
     let filename = filePath.substring(filePath.lastIndexOf('/') + 1);
 
     if (!filenameToDownloadInfo.has(filename) && downloadIdToFilename.has(downloadItem.id)) {
+        // Update filename for native downloads.
         filename = downloadIdToFilename.get(downloadItem.id);
     }
 
@@ -67,14 +69,14 @@ function getDownloadInfoByFilename(downloadItem) {
     }
 }
 
-chrome.downloads.onCreated.addListener((downloadItem) => {
+chrome.downloads.onCreated.addListener(async (downloadItem) => {
     // Download started.
     log(`File download started(${activeDownloadIds.size}):`, downloadItem);
 
     activeDownloadIds.add(downloadItem.id);
 });
 
-chrome.downloads.onDeterminingFilename.addListener(async (downloadItem, suggest) => {
+chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
     // Download filename determinated.
     log('downloadItem:', downloadItem);
 
@@ -94,7 +96,7 @@ chrome.downloads.onDeterminingFilename.addListener(async (downloadItem, suggest)
     }
 
     // Set correct filename.
-    await suggest({
+    suggest({
         filename,
         conflictAction: 'overwrite',
     });
@@ -102,14 +104,13 @@ chrome.downloads.onDeterminingFilename.addListener(async (downloadItem, suggest)
     if (downloadInfo.tabId) {
         // Close download tab, it's no longer needed.
         try {
-            await chrome.tabs.remove(downloadInfo.tabId);
-            log('Tab closed:', downloadInfo.tabId);
+            chrome.tabs.remove(downloadInfo.tabId, () => {
+                log('Tab closed:', downloadInfo.tabId);
+            });
         } catch (e) {
             log('Tab hase been already closed:', downloadInfo.tabId);
         }
     }
-
-    return true;
 });
 
 chrome.downloads.onChanged.addListener((downloadDelta) => {
@@ -121,7 +122,7 @@ chrome.downloads.onChanged.addListener((downloadDelta) => {
         // - or -
         // Download was insterrupted by user or another reason.
 
-        chrome.downloads.search({ id: downloadDelta.id }, function (downloadItems) {
+        chrome.downloads.search({ id: downloadDelta.id }, async (downloadItems) => {
             log('Download items:', downloadItems);
 
             if (downloadDelta.state.current === 'complete') {
@@ -150,7 +151,7 @@ chrome.downloads.onChanged.addListener((downloadDelta) => {
             let finalUrlIndex = '';
 
             if (!downloadInfo) {
-                // All downloads that were not initiated by extension.
+                // Downloads that were not initiated by extension or interrupted downloads.
                 warn('Unknown download item:', downloadItems[0]);
                 return;
             }
@@ -183,12 +184,16 @@ chrome.downloads.onChanged.addListener((downloadDelta) => {
             }
 
             if (activeBatchPort && activeMessage.links?.length) {
+                pendingDownloads++
+
                 // Download next link.
-                setTimeout(() => {
+                setTimeout(async () => {
                     // Only trigger if the batch wasn't cancelled during the delay.
                     if (activeBatchPort && activeMessage.links?.length) {
-                        downloadLinks(activeMessage, 1);
+                        await downloadLinks(activeMessage, 1);
                     }
+                    pendingDownloads = Math.max(0, pendingDownloads - 1);
+                    checkDownloadCompletion();
                 }, 1000);
             } else if (activeBatchPort && activeMessage.links?.length === 0) {
                 // All links have been sent to download queue, but downloading may still be in progress.
@@ -196,14 +201,21 @@ chrome.downloads.onChanged.addListener((downloadDelta) => {
                 activeMessage = {};
             }
 
-            if (!activeDownloadIds.size && !activeMessage.links) {
-                log('All files have been downloaded.');
-                filenameToDownloadInfo.clear();
-                activeBatchPort = null;
-            }
+            checkDownloadCompletion();
         });
     }
 });
+
+function checkDownloadCompletion() {
+    if (!activeDownloadIds.size && !activeMessage.links?.length && !pendingDownloads) {
+        log('All files have been downloaded.');
+        filenameToDownloadInfo.clear();
+        activeBatchPort = null;
+
+        // Ensures HTTP headers are removed for interrupted downloads.
+        removeHeadersAll();
+    }
+}
 
 function normalizeFilename(name, ext) {
     const normalizedFileName = name.replace(/[\/\(\)]/g, '-');
@@ -304,7 +316,7 @@ async function downloadLinks(message, maxConcurrentDownloads = 3) {
                         filename = normalizeFolder(message.folder) + '_' + filename;
                     }
 
-                    // Convert raw URL to Blob so Firefox can download it.
+                    // Convert raw URL data URL.
                     url = `data:application/octet-stream;base64,${link.link_raw}`;
 
                     // Save download info.
@@ -317,13 +329,23 @@ async function downloadLinks(message, maxConcurrentDownloads = 3) {
                     log('Saved:', filename, downloadInfo);
 
                     // Init download.
-                    const downloadId = await chrome.downloads.download({
-                        url,
-                        filename,
-                        saveAs: false,
-                    });
+                    await new Promise((resolve) => {
+                        chrome.downloads.download({
+                            url,
+                            filename,
+                            saveAs: false,
+                        }, (downloadId) => {
+                            if (!downloadId) {
+                                log('Failed to initiate download:', chrome.runtime.lastError);
+                                resolve();
+                                return;
+                            }
 
-                    downloadIdToFilename.set(downloadId, filename);
+                            activeDownloadIds.add(downloadId);
+                            downloadIdToFilename.set(downloadId, filename);
+                            resolve();
+                        });
+                    });
                 }
 
                 if (link.download === 'url') {
@@ -341,7 +363,7 @@ async function downloadLinks(message, maxConcurrentDownloads = 3) {
                                 {
                                     header: 'content-disposition',
                                     operation: 'set',
-                                    value: 'attachment; filename=' + filename,
+                                    value: 'attachment; filename=' + (createFolder && message.folder ? normalizeFolder(message.folder) + '_' + filename : filename),
                                 },
                             ],
                         },
@@ -412,13 +434,23 @@ async function downloadLinks(message, maxConcurrentDownloads = 3) {
             log('Saved:', filename, downloadInfo);
 
             // Download
-            const downloadId = await chrome.downloads.download({
-                url,
-                filename,
-                saveAs: false,
-            });
+            await new Promise((resolve) => {
+                chrome.downloads.download({
+                    url,
+                    filename,
+                    saveAs: false,
+                }, (downloadId) => {
+                    if (!downloadId) {
+                        log('Failed to initiate download:', chrome.runtime.lastError);
+                        resolve();
+                        return;
+                    }
 
-            downloadIdToFilename.set(downloadId, filename);
+                    activeDownloadIds.add(downloadId);
+                    downloadIdToFilename.set(downloadId, filename);
+                    resolve();
+                });
+            });
         }
     }
 }
@@ -763,6 +795,10 @@ chrome.runtime.onConnectExternal.addListener((port) => {
         if (chrome.runtime.lastError) {
             log('Port disconnected:', chrome.runtime.lastError.message);
         }
+
+        log('Port disconneted. Stop any further downloads.');
+        activeBatchPort = null;
+        activeMessage = {};
     });
 
     port.onMessage.addListener((message) => {
