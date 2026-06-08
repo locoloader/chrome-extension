@@ -60,7 +60,7 @@
             console.log('Using HLS.js');
             const hls = new Hls({
                 enableWorker: true,
-                workerPath: 'libs/hls.worker.min.js',
+                workerPath: 'libs/hls.worker.js',
             });
 
             hls.loadSource(sourceUrl);

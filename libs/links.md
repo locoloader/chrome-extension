@@ -1,2 +1,1 @@
-- https://cdn.jsdelivr.net/npm/hls.js@1.6.15/dist/hls.min.js
-- https://cdn.jsdelivr.net/npm/hls.js@1.6.15/dist/hls.worker.min.js
+- https://github.com/video-dev/hls.js/releases/download/v1.6.16/release.zip
