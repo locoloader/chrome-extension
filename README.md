@@ -6,6 +6,8 @@
 3. Open the address `chrome://extensions` in your Chrome browser and turn on the `Developer mode` switch in the top-right corner.
 4. Drag and drop the `chrome-extension-main` folder anywhere onto the extensions page to install it. Note that Windows may double the folder like this: `chrome-extension-main\chrome-extension-main`. If this happens, drag and drop only the inner folder into Chrome. If you use the outer folder, the installation will fail.
 
+<p><img src="./img/how-to-install-chrome-extension-locally.gif" width="580" alt="How to Install the Firefox Extension Locally"></p>
+
 ### 💡 Installation Tips
 - Before you drag and drop the extension folder into Chrome, move the folder out of your `Downloads` folder. This ensures you won't accidentally delete it later when clearing out other downloaded files.
 - If you prefer not to install the extension from source, you can still use our [Firefox extension](https://addons.mozilla.org/en-US/firefox/addon/locoloader/).
