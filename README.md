@@ -1,27 +1,35 @@
 # Locoloader Chrome Extension
 
-### :hammer_and_wrench: Installation
-1. Download this extension as a [ZIP file from GitHub](https://github.com/locoloader/chrome-extension/archive/refs/heads/main.zip)
-2. Unzip the file and you should have a folder named `chrome-extension-main`
-3. Visit the URL `chrome://extensions` and enable `Developer mode`
-4. Drag and drop the `chrome-extension-main` folder anywhere onto the extensions page to install it (do not delete the folder afterwards)
+### 🛠️ Installation
+1. Click [here](https://github.com/locoloader/chrome-extension/archive/refs/heads/main.zip) to download the Locoloader extension from GitHub.
+2. Extract (unzip) the downloaded file. This will create a folder named `chrome-extension-main`.
+3. Open the address `chrome://extensions` in your Chrome browser and turn on the `Developer mode` switch in the top-right corner.
+4. Drag and drop the `chrome-extension-main` folder anywhere onto the extensions page to install it. Note that Windows may double the folder like this: `chrome-extension-main\chrome-extension-main`. If this happens, drag and drop only the inner folder into Chrome. If you use the outer folder, the installation will fail.
+5. Do not delete or move the extension folder after installation, because the extension runs directly from it.
 
-<p><img src="./img/how-to-install-chrome-extension-locally.gif" width="580" alt="How to Install the Chrome Extension Locally"></p>
+### 💡 Installation Tips
+- Before you drag and drop the extension folder into Chrome, move the folder out of your `Downloads` folder. This ensures you won't accidentally delete it later when clearing out other downloaded files.
+- If you prefer not to install the extension from source, you can still use our [Firefox extension](https://addons.mozilla.org/en-US/firefox/addon/locoloader/).
 
-:bulb: If you don't want to install the extension from source, you can still use our [Firefox extension](https://addons.mozilla.org/en-US/firefox/addon/locoloader/).
+### ⚙️ Settings
+1. Open the address `chrome://extensions` in your Chrome browser.
+2. Find the Locoloader extension and click the `Details` button.
+3. If you use Incognito Windows, turn on the `Allow in Incognito` switch.
 
-### :hammer_and_wrench: Update
-1. Visit the URL `chrome://extensions`
-2. Remove the Locoloader extension
-3. Follow the [installation steps](#hammer_and_wrench-installation)
+### ⬆️ Update
+1. Open the address `chrome://extensions` in your Chrome browser.
+2. Remove the Locoloader extension.
+3. Follow the [installation steps](#installation).
 
-### :thinking: Why not from the Chrome Web Store?
-This extension has been in the Chrome Web Store for almost 4 years and has been installed by more than 100k+ users. Unfortunately, it has been removed from the store due to its potential use with adult content.
+Windows may extract (unzip) the extension into a nested `chrome-extension-main\chrome-extension-main` folder instead of just a single `chrome-extension-main folder`. If this happens, make sure you drag and drop the inner chrome-extension-main folder, otherwise the installation will fail.
+
+### 🤔 Why isn't this on the Chrome Web Store?
+This extension was in the Chrome Web Store for nearly 4 years and was installed by more than 100k+ users. Unfortunately, it was removed from the store due to its potential use with adult content.
 
 <p><img src="./img/chrome-web-store-removal-notification.png" width="580" alt="Chrome Web Store Removal Notification"></p>
 
-### :thinking: Is it safe?
-We have open-sourced the Locoloader extension and anyone can take a look at the source code for full transparency. If you discover a security vulnerability, please send an e-mail to [info@locoloader.com](mailto:info@locoloader.com).
+### 🤔 Is it safe?
+We made the Locoloader extension open-source so anyone can look at the code for full transparency. If you find a security bug, please let us know at [info@locoloader.com](mailto:info@locoloader.com).
 
 ### MIT License
 Copyright (c) 2026 Locoloader.com
