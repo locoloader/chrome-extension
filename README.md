@@ -2,10 +2,9 @@
 
 ### 🛠️ Installation
 1. Click [here](https://github.com/locoloader/chrome-extension/archive/refs/heads/main.zip) to download the Locoloader extension from GitHub.
-2. Extract (unzip) the downloaded file. This will create a folder named `chrome-extension-main`.
+2. Extract (unzip) the downloaded file. This will create a folder named `chrome-extension-main`. Do not delete or move this folder after installation, because the extension runs directly from it.
 3. Open the address `chrome://extensions` in your Chrome browser and turn on the `Developer mode` switch in the top-right corner.
 4. Drag and drop the `chrome-extension-main` folder anywhere onto the extensions page to install it. Note that Windows may double the folder like this: `chrome-extension-main\chrome-extension-main`. If this happens, drag and drop only the inner folder into Chrome. If you use the outer folder, the installation will fail.
-5. Do not delete or move the extension folder after installation, because the extension runs directly from it.
 
 ### 💡 Installation Tips
 - Before you drag and drop the extension folder into Chrome, move the folder out of your `Downloads` folder. This ensures you won't accidentally delete it later when clearing out other downloaded files.
