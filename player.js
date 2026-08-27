@@ -50,6 +50,11 @@
         if (sourceUrl.toLowerCase().includes('.m3u')) {
             isHls = true;
         }
+
+        if (sourceUrl.toLowerCase().includes('/hls/')) {
+            isHls = true;
+        }
+
         console.log('Using remote URL address directly.');
     }
 
