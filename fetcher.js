@@ -17,6 +17,10 @@ if (runAt === 'document_start') {
 // Monkey-patch console clear.
 console.clear = () => { };
 
+// Obtain AsyncFunction.
+// @link https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AsyncFunction
+const LLAsyncFunction = async function () { }.constructor;
+
 // Actions.
 const LLActionsErrors = [];
 const LLActionsScraped = [];
@@ -237,52 +241,8 @@ const LLActions = {
                 return;
             }
 
-            // Create unique callback on window to receive the async result.
-            const callbackName = '_ll_cb_' + Math.random().toString(36).substring(2);
-            window[callbackName] = (res) => {
-                delete window[callbackName];
-                resolve(res);
-            };
-
-            // Code to run.
-            const wrappedCode = `document.currentScript?.remove();
-(async () => {
-    try {
-        ${code}
-        const res = await SB_go(${JSON.stringify(message.lejp)});
-        window['${callbackName}'](res);
-    } catch (e) {
-        window['${callbackName}'](null);
-    }
-})();`;
-
-            // Append script element to page.
-            const scriptEl = document.createElement('script');
-
-            // Set existing CSP nonce to script element if the host page uses one.
-            const existingNonce = document.querySelector('script[nonce]')?.nonce;
-            if (existingNonce) {
-                scriptEl.nonce = existingNonce;
-            }
-
-            // Place code inside script element.
-            if (window.trustedTypes && window.trustedTypes.createPolicy) {
-                try {
-                    // Wrap code in trusted script.
-                    const policy = window.trustedTypes.defaultPolicy || window.trustedTypes.createPolicy('llPolicy', { createScript: (s) => s });
-                    scriptEl.textContent = policy.createScript(wrappedCode);
-                } catch (e) {
-                    // Fallback.
-                    scriptEl.textContent = wrappedCode;
-                }
-            } else {
-                scriptEl.textContent = wrappedCode;
-            }
-
-            (document.head || document.documentElement).appendChild(scriptEl);
-
-            // Fallback removal in case code wasn't triggered.
-            scriptEl?.remove();
+            code = code + ' resolve(await SB_go(\'' + message.lejp + '\'));';
+            new LLAsyncFunction('resolve', code)(resolve);
         });
     }
 };

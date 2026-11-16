@@ -637,6 +637,21 @@ function openFetcher(message, sender) {
         // Set headers only to fetcher tab.
         log('Received headers:', message.headers);
         const headerInfoArr = [];
+
+        headerInfoArr.push(await setHeaders(
+            {
+                type: 'modifyHeaders',
+                responseHeaders: [
+                    { header: 'content-security-policy', operation: 'remove' },
+                    { header: 'content-security-policy-report-only', operation: 'remove' },
+                ],
+            },
+            {
+                tabIds: [tab.id],
+                resourceTypes: ['main_frame', 'sub_frame'],
+            },
+        ));
+
         for (const headerObj of message.headers) {
             headerObj.condition['tabIds'] = [tab.id];
 
@@ -742,7 +757,7 @@ function openFetcher(message, sender) {
                     chrome.runtime.onMessage.removeListener(messageListener);
                     chrome.tabs.onRemoved.removeListener(closeListener);
                     clearTimeout(timeoutId);
-                };
+                }
 
                 chrome.runtime.onMessage.addListener(messageListener);
                 chrome.tabs.onRemoved.addListener(closeListener);
@@ -970,7 +985,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
             try {
                 // Send request.
                 fetchResponse = await fetch(message.url, message.fetchOptions ? message.fetchOptions : {});
-            } catch (e) { }
+            } catch (e) {}
 
             // Remove request headers.
             if (typeof headerInfo.UUID !== 'undefined') {
@@ -1260,11 +1275,6 @@ async function setHeaders(action, condition) {
 // Ensure disallowed headers are removed.
 function sanitizeHeaders(headerArr) {
     const DISALLOWED_HEADERS = new Set([
-        // Core Security Policies.
-        'content-security-policy',
-        'content-security-policy-report-only',
-        'strict-transport-security',
-
         // Framing and Sniffing Protections.
         'x-frame-options',
         'x-content-type-options',
