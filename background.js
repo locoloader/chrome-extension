@@ -860,7 +860,7 @@ function openFetcher(message, sender) {
                 message['doNotReFetch'] = true;
 
                 // Re-open, re-fetch and return result from fetcher.js.
-                resolve(await openFetcher(message));
+                resolve(await openFetcher(message, sender));
             }, 2000);
         } else {
             // Return result from fetcher.js.
